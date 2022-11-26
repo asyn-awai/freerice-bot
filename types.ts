@@ -38,3 +38,14 @@ export interface GameRequestBody {
 		};
 	};
 }
+
+export interface ConfigOptions {
+	username: string;
+	password: string;
+	numProcesses: number;
+	logErrors: boolean;
+	showInstance: boolean;
+	showQuestions: boolean;
+	showNumSolved: boolean;
+	showRiceCount: boolean;
+}

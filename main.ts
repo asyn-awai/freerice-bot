@@ -1,11 +1,14 @@
 import cluster from "cluster";
 import * as sa from "superagent";
+import chalk from "chalk";
 import { GameRequestBody, LoginResponseBody } from "./types";
+import uas from "./userAgents";
+import config from "./config";
 
 class Bot {
 	private req: ReturnType<typeof sa.agent>;
 	private instance: number;
-	private count = 0;
+	private numSolved = 0;
 	private username: string;
 	private password: string;
 	private MULTIPLICATION_CATEGORY_ID = "66f2a9aa-bac2-5919-997d-2d17825c1837";
@@ -19,36 +22,33 @@ class Bot {
 	};
 
 	constructor(instance: number) {
-		const { username, password } = require("./config.json");
+		const { username, password } = config;
 		[this.username, this.password] = [username, password];
 		this.req = sa.agent();
 		this.instance = instance;
 	}
 
-	randomizeUA() {
-		const uas = [
-			"Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.1",
-			"Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; WOW64; Trident/6.0)",
-			"Mozilla/5.0 (Windows NT 6.3; rv:36.0) Gecko/20100101 Firefox/36.0",
-			"Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36",
-		];
-		this.req.set(
-			"User-Agent",
-			uas[Math.round(Math.random() * (uas.length - 1))]
+	private randomizeUA() {
+		const newUA = uas[Math.floor(Math.random() * uas.length)];
+		console.log(
+			chalk.yellow(`Instance ${this.instance} using ${newUA} \n`)
 		);
+		this.req.set("User-Agent", newUA);
 	}
-	private getUaHeaders() {
+	private getUAHeaders() {
 		return {
 			"user-agent": this.req,
 			"x-frontend": "web-1.0.0",
 		};
 	}
+	private resetReq() {
+		this.req = sa.agent();
+	}
 
 	public async solve() {
-		this.randomizeUA();
-		await this.req.set(this.getUaHeaders());
-		await this.req.get("https://freerice.com/");
-		await this.req.get("https://freerice.com/profile-login");
+		await this.req.set(this.getUAHeaders());
+		// await this.req.get("https://freerice.com/");
+		// await this.req.get("https://freerice.com/profile-login");
 
 		// login
 		const { uuid, token } = (
@@ -63,7 +63,7 @@ class Bot {
 		});
 
 		// visit category page
-		await this.req.get("https://freerice.com/categories");
+		// await this.req.get("https://freerice.com/categories");
 
 		// select multiplication category
 		let game = (
@@ -71,13 +71,14 @@ class Bot {
 				.post("https://engine.freerice.com/games?lang=en")
 				.send({
 					category: this.MULTIPLICATION_CATEGORY_ID,
-					level: 1,
+					level: 2,
 					user: uuid,
 				})
 		).body as GameRequestBody;
 
 		// solve
 		while (true) {
+			if (this.numSolved % 250 === 0) this.randomizeUA();
 			const { question_id, question, user_rice_total } =
 				game.data.attributes;
 			const { text: question_text } = question;
@@ -89,10 +90,20 @@ class Bot {
 				user: uuid,
 			};
 			game = (await this.req.patch(answer_url).send(answer_req)).body;
-			this.count++;
-			console.log(
-				`instance: ${this.instance} | question: ${question_text} = ${answer} | numSolved: ${this.count} | rice: ${user_rice_total}`
-			);
+			this.numSolved++;
+
+			const out = [] as string[];
+			if (config.showInstance)
+				out.push(chalk.bold(`Instance: ${this.instance}`));
+			if (config.showQuestions)
+				out.push(
+					chalk.yellow(`Question: ${question_text} = ${answer}`)
+				);
+			if (config.showNumSolved)
+				out.push(chalk.green(`Solved: ${this.numSolved}`));
+			if (config.showRiceCount)
+				out.push(chalk.blue(`Rice: ${user_rice_total}`));
+			console.log(out.join(" | "));
 		}
 	}
 
@@ -101,18 +112,23 @@ class Bot {
 			try {
 				await this.solve();
 			} catch (err) {
-				console.error(err);
-				console.log("Blocked! Retrying in 5 seconds...\n\n");
-				await new Promise(resolve => setTimeout(resolve, 5000));
+				if (config.logErrors) console.error(err);
+				console.log(
+					chalk.red.bold(
+						`Instance ${this.instance} blocked; generating new session...`
+					)
+				);
+				this.resetReq();
 			}
 		}
 	}
 }
 
 if (cluster.isPrimary) {
-	const numCPUs = require("os").cpus().length;
-	for (let i = 0; i < numCPUs; i++) {
-		console.log(`Starting instance ${i}...`);
+	const numCores = require("os").cpus().length;
+	console.log(`CPU cores: ${numCores}`);
+	for (let i = 0; i < config.numProcesses; i++) {
+		console.log(chalk.yellow.bold(`Starting instance ${i}...`));
 		cluster.fork({ workerId: i });
 	}
 } else {
